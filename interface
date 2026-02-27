@@ -1,0 +1,97 @@
+import torch
+from transformers import BertTokenizer, BertForSequenceClassification
+import pickle
+import pandas as pd
+
+# ------------------------------
+# Device setup
+# ------------------------------
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# ------------------------------
+# Paths
+# ------------------------------
+model_path = "./stress_model"
+
+# ------------------------------
+# Load label encoder
+# ------------------------------
+with open(f"{model_path}/label_encoder.pkl", "rb") as f:
+    label_encoder = pickle.load(f)
+
+# ------------------------------
+# Load tokenizer
+# ------------------------------
+tokenizer = BertTokenizer.from_pretrained(model_path, local_files_only=True)
+
+# ------------------------------
+# Load model with forced label mapping
+# ------------------------------
+model = BertForSequenceClassification.from_pretrained(
+    model_path,
+    local_files_only=True,
+    num_labels=len(label_encoder.classes_),
+    id2label={i: label for i, label in enumerate(label_encoder.classes_)},
+    label2id={label: i for i, label in enumerate(label_encoder.classes_)}
+)
+model.to(device)
+model.eval()
+
+# ------------------------------
+# Single prediction function
+# ------------------------------
+def predict_stress(statement, max_length=128):
+    # Tokenize input
+    inputs = tokenizer(
+        statement,
+        max_length=max_length,
+        padding="max_length",
+        truncation=True,
+        return_tensors="pt"
+    )
+    inputs = {key: val.to(device) for key, val in inputs.items()}
+
+    # Model inference
+    with torch.no_grad():
+        outputs = model(**inputs)
+        logits = outputs.logits
+        probs = torch.softmax(logits, dim=1).cpu().numpy()[0]
+
+    # Debug: show probability distribution
+    prob_dict = {cls: float(p) for cls, p in zip(label_encoder.classes_, probs)}
+    print(f"\nInput: {statement}")
+    print("Probabilities:", prob_dict)
+
+    # Final prediction
+    predicted_class = probs.argmax()
+    predicted_label = label_encoder.inverse_transform([predicted_class])[0]
+    return predicted_label
+
+# ------------------------------
+# Batch inference function
+# ------------------------------
+def predict_batch(dataframe, text_column="statement"):
+    predictions = []
+    for statement in dataframe[text_column]:
+        pred = predict_stress(statement)
+        predictions.append(pred)
+    return predictions
+
+# ------------------------------
+# Example usage
+# ------------------------------
+if __name__ == "__main__":
+    test_statements = [
+        "I feel overwhelmed and can't sleep at night.",
+        "Everything is going great in my life!",
+        "I feel sad and hopeless all the time."
+    ]
+
+    for statement in test_statements:
+        prediction = predict_stress(statement)
+        print(f"Predicted Status: {prediction}\n")
+
+    # Example batch (uncomment if needed)
+    # df = pd.read_csv("your_test_dataset.csv")  # Replace with your dataset
+    # df["predicted_status"] = predict_batch(df)
+    # print(df[["statement", "predicted_status"]])
